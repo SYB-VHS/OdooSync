@@ -1,0 +1,10 @@
+# SyncOdoo autonome – lancer depuis le dossier SyncOdoo
+# docker compose --env-file .env up -d
+# Ou depuis la racine du repo : docker compose -f SyncOdoo/docker-compose.yml --env-file SyncOdoo/.env up -d
+services:
+  sync-odoo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    restart: unless-stopped
