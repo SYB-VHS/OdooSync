@@ -16,6 +16,14 @@ const ODOO_URL = process.env.ODOO_URL || "";
 const ODOO_DB = process.env.ODOO_DB || "";
 const ODOO_USERNAME = process.env.ODOO_USERNAME || "";
 const ODOO_PASSWORD = process.env.ODOO_PASSWORD || "";
+const ODOO_SEARCH_READ_BATCH_SIZE = (() => {
+  const n = Number(process.env.ODOO_SEARCH_READ_BATCH_SIZE || "5000");
+  return Number.isFinite(n) && n > 0 ? n : 5000;
+})();
+const QUOTE_LINES_LOOKBACK_MS = (() => {
+  const n = Number(process.env.QUOTE_LINES_LOOKBACK_MS || "900000");
+  return Number.isFinite(n) && n >= 0 ? n : 900000;
+})();
 
 async function getLastWriteDate(entityType: string): Promise<Date | null> {
   try {
@@ -123,6 +131,26 @@ async function odooSearchRead(
   return data.result || [];
 }
 
+async function odooSearchReadAll(
+  model: string,
+  domain: any[],
+  fields: string[],
+  batchSize: number = ODOO_SEARCH_READ_BATCH_SIZE,
+  order: string = "id asc"
+): Promise<any[]> {
+  const allRows: any[] = [];
+  let offset = 0;
+
+  while (true) {
+    const batch = await odooSearchRead(model, domain, fields, batchSize, offset, order);
+    allRows.push(...batch);
+    if (batch.length < batchSize) break;
+    offset += batchSize;
+  }
+
+  return allRows;
+}
+
 async function odooSearchIds(
   model: string,
   domain: any[],
@@ -185,6 +213,11 @@ function maxWriteDateOf(items: any[], current: Date | null): Date | null {
     const wd = new Date(item.write_date);
     return !max || wd > max ? wd : max;
   }, current);
+}
+
+function withLookback(date: Date | null, lookbackMs: number): Date | null {
+  if (!date || lookbackMs <= 0) return date;
+  return new Date(Math.max(0, date.getTime() - lookbackMs));
 }
 
 async function purgeDeletedQuotesAndOrphans() {
@@ -272,11 +305,12 @@ export async function syncQuotes() {
 
 export async function syncQuoteLines() {
   const lastWriteDate = await getLastWriteDate("quote_lines");
+  const effectiveLastWriteDate = withLookback(lastWriteDate, QUOTE_LINES_LOOKBACK_MS);
   const domain: any[] = [];
-  if (lastWriteDate) domain.push(["write_date", ">", toOdooDatetime(lastWriteDate)]);
-  const lines = await odooSearchRead("sale.order.line", domain, [
+  if (effectiveLastWriteDate) domain.push(["write_date", ">", toOdooDatetime(effectiveLastWriteDate)]);
+  const lines = await odooSearchReadAll("sale.order.line", domain, [
     "id", "order_id", "product_id", "name", "product_uom_qty", "price_unit", "price_subtotal", "discount", "display_type", "tax_ids", "product_uom_id", "write_date",
-  ], 10000);
+  ]);
   if (lines.length === 0) return { synced: 0 };
   const taxIds = new Set<number>();
   lines.forEach((line: any) => {
