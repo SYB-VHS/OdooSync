@@ -87,13 +87,18 @@ Vérifier les logs :
 docker compose logs -f sync-odoo
 ```
 
-### 4. Mettre à jour après un push
+### 4. Mettre à jour SyncOdoo sur le VPS (après modifs)
+
+**Le déploiement se fait depuis le repo OdooSync, pas depuis le repo Kanteen.** Voir [COMMANDES-DEPLOI.md](./COMMANDES-DEPLOI.md) pour le détail.
+
+- **En local** : copier les modifs de `Kanteen/SyncOdoo/` vers ton clone du repo **OdooSync**, puis `git add` / `commit` / **push** (vers OdooSync).
+- **Sur le VPS** (repo cloné dans `/opt/OdooSync`) :
 
 ```bash
-cd /chemin/vers/kanteen/SyncOdoo
+cd /opt/OdooSync
 git pull
-docker compose build --no-cache
-docker compose up -d
+docker compose --env-file .env build --no-cache
+docker compose --env-file .env up -d
 ```
 
 ### Résumé
