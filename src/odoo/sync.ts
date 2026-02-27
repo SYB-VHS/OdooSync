@@ -2,7 +2,14 @@
  * Synchronisation Odoo → PostgreSQL (SyncOdoo autonome)
  */
 
-import { pgUpsert, pgUpsertComposite, pgSelect, pgSelectOne } from "../database/odoo-helpers.js";
+import {
+  pgUpsert,
+  pgUpsertComposite,
+  pgSelect,
+  pgSelectOne,
+  pgDeleteNotIn,
+  pgDeleteOrphanQuoteLines,
+} from "../database/odoo-helpers.js";
 import { toOdooDatetime, domainSanitizeForOdoo19 } from "./utils.js";
 
 const ODOO_URL = process.env.ODOO_URL || "";
@@ -116,12 +123,80 @@ async function odooSearchRead(
   return data.result || [];
 }
 
+async function odooSearchIds(
+  model: string,
+  domain: any[],
+  limit: number = 5000,
+  offset: number = 0
+): Promise<number[]> {
+  const uid = await authenticate();
+  if (!uid) throw new Error("Echec de l'authentification Odoo");
+  const sanitizedDomain = domainSanitizeForOdoo19(domain);
+
+  const response = await fetch(`${ODOO_URL}/jsonrpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "call",
+      params: {
+        service: "object",
+        method: "execute_kw",
+        args: [
+          ODOO_DB,
+          uid,
+          ODOO_PASSWORD,
+          model,
+          "search",
+          [sanitizedDomain],
+          { limit, offset, order: "id asc" },
+        ],
+      },
+      id: Math.floor(Math.random() * 1000000),
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Erreur HTTP ${response.status} pour ${model}.search`);
+  const data = await response.json();
+  if (data.error) {
+    throw new Error(`Erreur API Odoo (${model}.search): ${data.error.message || JSON.stringify(data.error)}`);
+  }
+  return Array.isArray(data.result) ? data.result : [];
+}
+
+async function odooSearchAllIds(model: string, domain: any[]): Promise<number[]> {
+  const ids: number[] = [];
+  const batchSize = 5000;
+  let offset = 0;
+
+  while (true) {
+    const batch = await odooSearchIds(model, domain, batchSize, offset);
+    ids.push(...batch);
+    if (batch.length < batchSize) break;
+    offset += batchSize;
+  }
+
+  return ids;
+}
+
 function maxWriteDateOf(items: any[], current: Date | null): Date | null {
   return items.reduce((max: Date | null, item: any) => {
     if (!item.write_date) return max;
     const wd = new Date(item.write_date);
     return !max || wd > max ? wd : max;
   }, current);
+}
+
+async function purgeDeletedQuotesAndOrphans() {
+  const odooQuoteIds = await odooSearchAllIds("sale.order", []);
+  const deletedQuotes = await pgDeleteNotIn("odoo_quotes", "odoo_id", odooQuoteIds);
+  const deletedOrphanLines = await pgDeleteOrphanQuoteLines();
+
+  if (deletedQuotes > 0 || deletedOrphanLines > 0) {
+    console.log(
+      `[Sync] Purge devis: ${deletedQuotes} devis supprimes, ${deletedOrphanLines} lignes orphelines supprimees`
+    );
+  }
 }
 
 export async function syncTaxes() {
@@ -354,6 +429,7 @@ export async function syncAll() {
     await syncProducts();
     await syncPartners();
     await syncQuotes();
+    await purgeDeletedQuotesAndOrphans();
     await syncQuoteLines();
     await syncInvoices();
     await syncInvoiceLines();

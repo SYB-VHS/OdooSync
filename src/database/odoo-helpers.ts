@@ -160,3 +160,31 @@ export async function pgSelectOne<T = any>(
   const rows = await pgSelect<T>(table, { columns, where, limit: 1 });
   return rows.length > 0 ? rows[0] : null;
 }
+
+export async function pgDeleteNotIn(
+  table: string,
+  column: string,
+  values: number[]
+): Promise<number> {
+  if (values.length === 0) {
+    const result = await db.query(`DELETE FROM ${table}`);
+    return result.rowCount ?? 0;
+  }
+  const result = await db.query(
+    `DELETE FROM ${table} WHERE NOT (${column} = ANY($1::int[]))`,
+    [values]
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function pgDeleteOrphanQuoteLines(): Promise<number> {
+  const result = await db.query(`
+    DELETE FROM odoo_quote_lines l
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM odoo_quotes q
+      WHERE q.odoo_id = l.odoo_quote_id
+    )
+  `);
+  return result.rowCount ?? 0;
+}
